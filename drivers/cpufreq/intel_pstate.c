@@ -558,8 +558,387 @@ static void atom_set_pstate(struct cpudata *cpudata, int pstate)
 	int32_t vid_fp;
 	u32 vid;
 
+	mutex_lock(&intel_pstate_limits_lock);
+
+	if (policy->cpu == 0)
+		intel_pstate_hwp_enable(all_cpu_data[policy->cpu]);
+
+	all_cpu_data[policy->cpu]->epp_policy = 0;
+	intel_pstate_hwp_set(policy->cpu);
+
+	mutex_unlock(&intel_pstate_limits_lock);
+
+	return 0;
+}
+
+static void intel_pstate_update_policies(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		cpufreq_update_policy(cpu);
+}
+
+/************************** sysfs begin ************************/
+#define show_one(file_name, object)					\
+	static ssize_t show_##file_name					\
+	(struct kobject *kobj, struct kobj_attribute *attr, char *buf)	\
+	{								\
+		return sprintf(buf, "%u\n", global.object);		\
+	}
+
+static ssize_t intel_pstate_show_status(char *buf);
+static int intel_pstate_update_status(const char *buf, size_t size);
+
+static ssize_t show_status(struct kobject *kobj,
+			   struct kobj_attribute *attr, char *buf)
+{
+	ssize_t ret;
+
+	mutex_lock(&intel_pstate_driver_lock);
+	ret = intel_pstate_show_status(buf);
+	mutex_unlock(&intel_pstate_driver_lock);
+
+	return ret;
+}
+
+static ssize_t store_status(struct kobject *a, struct kobj_attribute *b,
+			    const char *buf, size_t count)
+{
+	char *p = memchr(buf, '\n', count);
+	int ret;
+
+	mutex_lock(&intel_pstate_driver_lock);
+	ret = intel_pstate_update_status(buf, p ? p - buf : count);
+	mutex_unlock(&intel_pstate_driver_lock);
+
+	return ret < 0 ? ret : count;
+}
+
+static ssize_t show_turbo_pct(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	struct cpudata *cpu;
+	int total, no_turbo, turbo_pct;
+	uint32_t turbo_fp;
+
+	mutex_lock(&intel_pstate_driver_lock);
+
+	if (!intel_pstate_driver) {
+		mutex_unlock(&intel_pstate_driver_lock);
+		return -EAGAIN;
+	}
+
+	cpu = all_cpu_data[0];
+
+	total = cpu->pstate.turbo_pstate - cpu->pstate.min_pstate + 1;
+	no_turbo = cpu->pstate.max_pstate - cpu->pstate.min_pstate + 1;
+	turbo_fp = div_fp(no_turbo, total);
+	turbo_pct = 100 - fp_toint(mul_fp(turbo_fp, int_tofp(100)));
+
+	mutex_unlock(&intel_pstate_driver_lock);
+
+	return sprintf(buf, "%u\n", turbo_pct);
+}
+
+static ssize_t show_num_pstates(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	struct cpudata *cpu;
+	int total;
+
+	mutex_lock(&intel_pstate_driver_lock);
+
+	if (!intel_pstate_driver) {
+		mutex_unlock(&intel_pstate_driver_lock);
+		return -EAGAIN;
+	}
+
+	cpu = all_cpu_data[0];
+	total = cpu->pstate.turbo_pstate - cpu->pstate.min_pstate + 1;
+
+	mutex_unlock(&intel_pstate_driver_lock);
+
+	return sprintf(buf, "%u\n", total);
+}
+
+static ssize_t show_no_turbo(struct kobject *kobj,
+			     struct kobj_attribute *attr, char *buf)
+{
+	ssize_t ret;
+
+	mutex_lock(&intel_pstate_driver_lock);
+
+	if (!intel_pstate_driver) {
+		mutex_unlock(&intel_pstate_driver_lock);
+		return -EAGAIN;
+	}
+
+	update_turbo_state();
+	if (global.turbo_disabled)
+		ret = sprintf(buf, "%u\n", global.turbo_disabled);
+	else
+		ret = sprintf(buf, "%u\n", global.no_turbo);
+
+	mutex_unlock(&intel_pstate_driver_lock);
+
+	return ret;
+}
+
+static ssize_t store_no_turbo(struct kobject *a, struct kobj_attribute *b,
+			      const char *buf, size_t count)
+{
+	unsigned int input;
+	int ret;
+
+	ret = sscanf(buf, "%u", &input);
+	if (ret != 1)
+		return -EINVAL;
+
+	mutex_lock(&intel_pstate_driver_lock);
+
+	if (!intel_pstate_driver) {
+		mutex_unlock(&intel_pstate_driver_lock);
+		return -EAGAIN;
+	}
+
+	mutex_lock(&intel_pstate_limits_lock);
+
+	update_turbo_state();
+	if (global.turbo_disabled) {
+		pr_warn("Turbo disabled by BIOS or unavailable on processor\n");
+		mutex_unlock(&intel_pstate_limits_lock);
+		mutex_unlock(&intel_pstate_driver_lock);
+		return -EPERM;
+	}
+
+	global.no_turbo = clamp_t(int, input, 0, 1);
+
+	if (global.no_turbo) {
+		struct cpudata *cpu = all_cpu_data[0];
+		int pct = cpu->pstate.max_pstate * 100 / cpu->pstate.turbo_pstate;
+
+		/* Squash the global minimum into the permitted range. */
+		if (global.min_perf_pct > pct)
+			global.min_perf_pct = pct;
+	}
+
+	mutex_unlock(&intel_pstate_limits_lock);
+
+	intel_pstate_update_policies();
+
+	mutex_unlock(&intel_pstate_driver_lock);
+
+	return count;
+}
+
+static ssize_t store_max_perf_pct(struct kobject *a, struct kobj_attribute *b,
+				  const char *buf, size_t count)
+{
+	unsigned int input;
+	int ret;
+
+	ret = sscanf(buf, "%u", &input);
+	if (ret != 1)
+		return -EINVAL;
+
+	mutex_lock(&intel_pstate_driver_lock);
+
+	if (!intel_pstate_driver) {
+		mutex_unlock(&intel_pstate_driver_lock);
+		return -EAGAIN;
+	}
+
+	mutex_lock(&intel_pstate_limits_lock);
+
+	global.max_perf_pct = clamp_t(int, input, global.min_perf_pct, 100);
+
+	mutex_unlock(&intel_pstate_limits_lock);
+
+	intel_pstate_update_policies();
+
+	mutex_unlock(&intel_pstate_driver_lock);
+
+	return count;
+}
+
+static ssize_t store_min_perf_pct(struct kobject *a, struct kobj_attribute *b,
+				  const char *buf, size_t count)
+{
+	unsigned int input;
+	int ret;
+
+	ret = sscanf(buf, "%u", &input);
+	if (ret != 1)
+		return -EINVAL;
+
+	mutex_lock(&intel_pstate_driver_lock);
+
+	if (!intel_pstate_driver) {
+		mutex_unlock(&intel_pstate_driver_lock);
+		return -EAGAIN;
+	}
+
+	mutex_lock(&intel_pstate_limits_lock);
+
+	global.min_perf_pct = clamp_t(int, input,
+				      min_perf_pct_min(), global.max_perf_pct);
+
+	mutex_unlock(&intel_pstate_limits_lock);
+
+	intel_pstate_update_policies();
+
+	mutex_unlock(&intel_pstate_driver_lock);
+
+	return count;
+}
+
+static ssize_t show_hwp_dynamic_boost(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%u\n", hwp_boost);
+}
+
+static ssize_t store_hwp_dynamic_boost(struct kobject *a,
+				       struct kobj_attribute *b,
+				       const char *buf, size_t count)
+{
+	unsigned int input;
+	int ret;
+
+	ret = kstrtouint(buf, 10, &input);
+	if (ret)
+		return ret;
+
+	mutex_lock(&intel_pstate_driver_lock);
+	hwp_boost = !!input;
+	intel_pstate_update_policies();
+	mutex_unlock(&intel_pstate_driver_lock);
+
+	return count;
+}
+
+show_one(max_perf_pct, max_perf_pct);
+show_one(min_perf_pct, min_perf_pct);
+
+define_one_global_rw(status);
+define_one_global_rw(no_turbo);
+define_one_global_rw(max_perf_pct);
+define_one_global_rw(min_perf_pct);
+define_one_global_ro(turbo_pct);
+define_one_global_ro(num_pstates);
+define_one_global_rw(hwp_dynamic_boost);
+
+static struct attribute *intel_pstate_attributes[] = {
+	&status.attr,
+	&no_turbo.attr,
+	&turbo_pct.attr,
+	&num_pstates.attr,
+	NULL
+};
+
+static const struct attribute_group intel_pstate_attr_group = {
+	.attrs = intel_pstate_attributes,
+};
+
+static void __init intel_pstate_sysfs_expose_params(void)
+{
+	struct kobject *intel_pstate_kobject;
+	int rc;
+
+	intel_pstate_kobject = kobject_create_and_add("intel_pstate",
+						&cpu_subsys.dev_root->kobj);
+	if (WARN_ON(!intel_pstate_kobject))
+		return;
+
+	rc = sysfs_create_group(intel_pstate_kobject, &intel_pstate_attr_group);
+	if (WARN_ON(rc))
+		return;
+
+	/*
+	 * If per cpu limits are enforced there are no global limits, so
+	 * return without creating max/min_perf_pct attributes
+	 */
+	if (per_cpu_limits)
+		return;
+
+	rc = sysfs_create_file(intel_pstate_kobject, &max_perf_pct.attr);
+	WARN_ON(rc);
+
+	rc = sysfs_create_file(intel_pstate_kobject, &min_perf_pct.attr);
+	WARN_ON(rc);
+
+	if (hwp_active) {
+		rc = sysfs_create_file(intel_pstate_kobject,
+				       &hwp_dynamic_boost.attr);
+		WARN_ON(rc);
+	}
+}
+/************************** sysfs end ************************/
+
+static void intel_pstate_hwp_enable(struct cpudata *cpudata)
+{
+	/* First disable HWP notification interrupt as we don't process them */
+	if (static_cpu_has(X86_FEATURE_HWP_NOTIFY))
+		wrmsrl_on_cpu(cpudata->cpu, MSR_HWP_INTERRUPT, 0x00);
+
+	wrmsrl_on_cpu(cpudata->cpu, MSR_PM_ENABLE, 0x1);
+	cpudata->epp_policy = 0;
+	if (cpudata->epp_default == -EINVAL)
+		cpudata->epp_default = intel_pstate_get_epp(cpudata, 0);
+}
+
+#define MSR_IA32_POWER_CTL_BIT_EE	19
+
+/* Disable energy efficiency optimization */
+static void intel_pstate_disable_ee(int cpu)
+{
+	u64 power_ctl;
+	int ret;
+
+	ret = rdmsrl_on_cpu(cpu, MSR_IA32_POWER_CTL, &power_ctl);
+	if (ret)
+		return;
+
+	if (!(power_ctl & BIT(MSR_IA32_POWER_CTL_BIT_EE))) {
+		pr_info("Disabling energy efficiency optimization\n");
+		power_ctl |= BIT(MSR_IA32_POWER_CTL_BIT_EE);
+		wrmsrl_on_cpu(cpu, MSR_IA32_POWER_CTL, power_ctl);
+	}
+}
+
+static int atom_get_min_pstate(void)
+{
+	u64 value;
+
+	rdmsrl(MSR_ATOM_CORE_RATIOS, value);
+	return (value >> 8) & 0x7F;
+}
+
+static int atom_get_max_pstate(void)
+{
+	u64 value;
+
+	rdmsrl(MSR_ATOM_CORE_RATIOS, value);
+	return (value >> 16) & 0x7F;
+}
+
+static int atom_get_turbo_pstate(void)
+{
+	u64 value;
+
+	rdmsrl(MSR_ATOM_CORE_TURBO_RATIOS, value);
+	return value & 0x7F;
+}
+
+static u64 atom_get_val(struct cpudata *cpudata, int pstate)
+{
+	u64 val;
+	int32_t vid_fp;
+	u32 vid;
+
 	val = (u64)pstate << 8;
-	if (limits->no_turbo && !limits->turbo_disabled)
+	if (global.no_turbo && !global.turbo_disabled)
 		val |= (u64)1 << 32;
 
 	vid_fp = cpudata->vid.min + mul_fp(
