@@ -12,6 +12,10 @@
 #include <linux/rmap.h>
 #include <linux/swap.h>
 #include <linux/swapops.h>
+#include <linux/mmu_notifier.h>
+#include <linux/page_idle.h>
+#include <linux/mm_inline.h>
+#include <linux/ctype.h>
 
 #include <asm/elf.h>
 #include <asm/uaccess.h>
@@ -139,7 +143,7 @@ static void seq_print_vma_name(struct seq_file *m, struct vm_area_struct *vma)
 		struct page *page;
 
 		pages_pinned = get_user_pages(current, mm, page_start_vaddr,
-				1, 0, 0, &page, NULL);
+				1, 0, &page, NULL);
 		if (pages_pinned < 1) {
 			seq_puts(m, "<fault>]");
 			return;
@@ -403,7 +407,7 @@ static int show_map(struct seq_file *m, void *v, int is_pid)
 
 static int show_pid_map(struct seq_file *m, void *v)
 {
-	return show_map_internal(m, v, NULL);
+	return show_map(m, v, 1);
 }
 
 static int show_tid_map(struct seq_file *m, void *v)
