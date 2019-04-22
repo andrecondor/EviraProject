@@ -1,5 +1,4 @@
-/*
- * Copyright (c) 2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,11 +10,25 @@
  * GNU General Public License for more details.
  */
 
+
 /dts-v1/;
 
-#include "apq8016-sbc.dtsi"
+#include "sdm455.dtsi"
+#include "sdm455-rcm.dtsi"
+#include "sdm660-external-codec.dtsi"
 
 / {
-	model = "Qualcomm Technologies, Inc. APQ 8016 SBC";
-	compatible = "qcom,apq8016-sbc", "qcom,apq8016", "qcom,sbc";
+	model = "Qualcomm Technologies, Inc. SDM 630 PM660 + PM660L RCM";
+	compatible = "qcom,sdm630-cdp", "qcom,sdm630", "qcom,cdp";
+	qcom,board-id = <21 0>;
+};
+
+&tavil_snd {
+	qcom,msm-mbhc-hphl-swh = <0>;
+	qcom,msm-mbhc-gnd-swh = <0>;
+};
+
+&tasha_snd {
+	qcom,msm-mbhc-hphl-swh = <0>;
+	qcom,msm-mbhc-gnd-swh = <0>;
 };

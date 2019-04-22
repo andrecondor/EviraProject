@@ -1,5 +1,4 @@
-/*
- * Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,24 +10,15 @@
  * GNU General Public License for more details.
  */
 
-#include "msm8916.dtsi"
-#include "pm8916.dtsi"
+
+/dts-v1/;
+
+#include "sdm455.dtsi"
+#include "sdm455-rcm.dtsi"
+#include "sdm660-internal-codec.dtsi"
 
 / {
-	aliases {
-		serial0 = &blsp1_uart2;
-	};
-
-	chosen {
-		stdout-path = "serial0";
-	};
-
-	soc {
-		serial@78b0000 {
-			status = "okay";
-			pinctrl-names = "default", "sleep";
-			pinctrl-0 = <&blsp1_uart2_default>;
-			pinctrl-1 = <&blsp1_uart2_sleep>;
-		};
-	};
+	model = "Qualcomm Technologies, Inc. SDM455 Int. Audio Codec RCM";
+	compatible = "qcom,sdm630-cdp", "qcom,sdm630", "qcom,cdp";
+	qcom,board-id = <21 1>;
 };
