@@ -47,82 +47,6 @@
 #include "ion_priv.h"
 #include "compat_ion.h"
 
-/**
- * struct ion_device - the metadata of the ion device node
- * @dev:		the actual misc device
- * @buffers:		an rb tree of all the existing buffers
- * @buffer_lock:	lock protecting the tree of buffers
- * @lock:		rwsem protecting the tree of heaps and clients
- * @heaps:		list of all the heaps in the system
- * @user_clients:	list of all the clients created from userspace
- */
-struct ion_device {
-	struct miscdevice dev;
-	struct rb_root buffers;
-	struct mutex buffer_lock;
-	struct rw_semaphore lock;
-	struct plist_head heaps;
-	long (*custom_ioctl)(struct ion_client *client, unsigned int cmd,
-			     unsigned long arg);
-	struct rb_root clients;
-	struct dentry *debug_root;
-	struct dentry *heaps_debug_root;
-	struct dentry *clients_debug_root;
-};
-
-/**
- * struct ion_client - a process/hw block local address space
- * @node:		node in the tree of all clients
- * @dev:		backpointer to ion device
- * @handles:		an rb tree of all the handles in this client
- * @idr:		an idr space for allocating handle ids
- * @lock:		lock protecting the tree of handles
- * @name:		used for debugging
- * @display_name:	used for debugging (unique version of @name)
- * @display_serial:	used for debugging (to make display_name unique)
- * @task:		used for debugging
- *
- * A client represents a list of buffers this client may access.
- * The mutex stored here is used to protect both handles tree
- * as well as the handles themselves, and should be held while modifying either.
- */
-struct ion_client {
-	struct rb_node node;
-	struct ion_device *dev;
-	struct rb_root handles;
-	struct idr idr;
-	struct mutex lock;
-	char *name;
-	char *display_name;
-	int display_serial;
-	struct task_struct *task;
-	pid_t pid;
-	struct dentry *debug_root;
-};
-
-/**
- * ion_handle - a client local reference to a buffer
- * @ref:		reference count
- * @client:		back pointer to the client the buffer resides in
- * @buffer:		pointer to the buffer
- * @node:		node in the client's handle rbtree
- * @kmap_cnt:		count of times this client has mapped to kernel
- * @id:			client-unique id allocated by client->idr
- *
- * Modifications to node, map_cnt or mapping should be protected by the
- * lock in the client.  Other fields are never changed after initialization.
- */
-struct ion_handle {
-	struct kref ref;
-	struct ion_client *client;
-	struct ion_buffer *buffer;
-	struct rb_node node;
-	unsigned int kmap_cnt;
-	int id;
-};
-
-static struct ion_device *ion_dev;
-
 bool ion_buffer_fault_user_mappings(struct ion_buffer *buffer)
 {
 	return (buffer->flags & ION_FLAG_CACHED) &&
@@ -863,30 +787,7 @@ static int is_client_alive(struct ion_client *client)
 static int ion_debug_client_show(struct seq_file *s, void *unused)
 {
 	struct ion_client *client = s->private;
-	struct rb_node *n, *cnode;
-	bool found = false;
-
-	down_write(&ion_dev->lock);
-
-	if (!client || (client->dev != ion_dev)) {
-		up_write(&ion_dev->lock);
-		return -EINVAL;
-	}
-
-	cnode = rb_first(&ion_dev->clients);
-	for ( ; cnode; cnode = rb_next(cnode)) {
-		struct ion_client *c = rb_entry(cnode,
-				struct ion_client, node);
-		if (client == c) {
-			found = true;
-			break;
-		}
-	}
-
-	if (!found) {
-		up_write(&ion_dev->lock);
-		return -EINVAL;
-	}
+	struct rb_node *n;
 
 	mutex_lock(&debugfs_mutex);
 	if (!is_client_alive(client)) {
@@ -914,7 +815,7 @@ static int ion_debug_client_show(struct seq_file *s, void *unused)
 		seq_printf(s, "\n");
 	}
 	mutex_unlock(&client->lock);
-	up_write(&ion_dev->lock);
+	mutex_unlock(&debugfs_mutex);
 	return 0;
 }
 
@@ -2164,7 +2065,8 @@ debugfs_done:
 	init_rwsem(&idev->lock);
 	plist_head_init(&idev->heaps);
 	idev->clients = RB_ROOT;
-	ion_dev = idev;
+	ion_root_client = &idev->clients;
+	mutex_init(&debugfs_mutex);
 	return idev;
 }
 EXPORT_SYMBOL(ion_device_create);
