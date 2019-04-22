@@ -307,14 +307,12 @@ const char * const *v4l2_ctrl_get_menu(u32 id)
 	static const char * const header_mode[] = {
 		"Separate Buffer",
 		"Joined With 1st Frame",
-		"Joined With I frame",
 		NULL,
 	};
 	static const char * const multi_slice[] = {
 		"Single",
 		"Max Macroblocks",
 		"Max Bytes",
-		"GOB",
 		NULL,
 	};
 	static const char * const entropy_mode[] = {
@@ -339,7 +337,6 @@ const char * const *v4l2_ctrl_get_menu(u32 id)
 		"4.2",
 		"5",
 		"5.1",
-		"5.2",
 		NULL,
 	};
 	static const char * const h264_loop_filter[] = {
@@ -364,9 +361,7 @@ const char * const *v4l2_ctrl_get_menu(u32 id)
 		"Scalable Baseline",
 		"Scalable High",
 		"Scalable High Intra",
-		"Stereo High",
 		"Multiview High",
-		"Constrained High",
 		NULL,
 	};
 	static const char * const vui_sar_idc[] = {
@@ -1217,7 +1212,7 @@ static u32 user_flags(const struct v4l2_ctrl *ctrl)
 
 static void fill_event(struct v4l2_event *ev, struct v4l2_ctrl *ctrl, u32 changes)
 {
-	memset(ev->reserved, 0, sizeof(ev->reserved));
+	memset(ev, 0, sizeof(*ev));
 	ev->type = V4L2_EVENT_CTRL;
 	ev->id = ctrl->id;
 	ev->u.ctrl.changes = changes;

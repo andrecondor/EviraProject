@@ -2,7 +2,6 @@
  *  linux/init/main.c
  *
  *  Copyright (C) 1991, 1992  Linus Torvalds
- *  Copyright (C) 2019 XiaoMi, Inc.
  *
  *  GK 2/5/95  -  Changed to support mounting root fs via NFS
  *  Added initrd & change_root: Werner Almesberger & Hans Lermen, Feb '96
@@ -89,12 +88,15 @@
 #include <asm/setup.h>
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
-#include <soc/qcom/boot_stats.h>
+
 static int kernel_init(void *);
 
 extern void init_IRQ(void);
 extern void fork_init(void);
 extern void radix_tree_init(void);
+#ifndef CONFIG_DEBUG_RODATA
+static inline void mark_rodata_ro(void) { }
+#endif
 
 /*
  * Debug helper: via this flag we know that we are in 'early bootup code'
@@ -470,7 +472,7 @@ void __init __weak smp_setup_processor_id(void)
 }
 
 # if THREAD_SIZE >= PAGE_SIZE
-void __init __weak thread_stack_cache_init(void)
+void __init __weak thread_info_cache_init(void)
 {
 }
 #endif
@@ -493,14 +495,11 @@ static void __init mm_init(void)
 	ioremap_huge_init();
 	kaiser_init();
 }
-int fpsensor=1;
-bool is_poweroff_charge = false;
 
 asmlinkage __visible void __init start_kernel(void)
 {
 	char *command_line;
 	char *after_dashes;
-	char *p=NULL;
 
 	/*
 	 * Need to run as early as possible, to initialize the
@@ -510,6 +509,11 @@ asmlinkage __visible void __init start_kernel(void)
 	set_task_stack_end_magic(&init_task);
 	smp_setup_processor_id();
 	debug_objects_early_init();
+
+	/*
+	 * Set up the the initial canary ASAP:
+	 */
+	boot_init_stack_canary();
 
 	cgroup_init_early();
 
@@ -524,10 +528,6 @@ asmlinkage __visible void __init start_kernel(void)
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
-	/*
-	 * Set up the the initial canary ASAP:
-	 */
-	boot_init_stack_canary();
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
@@ -538,20 +538,6 @@ asmlinkage __visible void __init start_kernel(void)
 	page_alloc_init();
 
 	pr_notice("Kernel command line: %s\n", boot_command_line);
-	p = NULL;
-	p= strstr(boot_command_line, "androidboot.fpsensor=fpc");
-	if(p){
-		fpsensor = 1;
-	}else{
-		fpsensor = 2;
-	}
-
-	p= NULL;
-	p= strstr(boot_command_line, "androidboot.mode=charger");
-	if(p)
-	{
-		is_poweroff_charge = true;
-	}
 	parse_early_param();
 	after_dashes = parse_args("Booting kernel",
 				  static_command_line, __start___param,
@@ -664,7 +650,7 @@ asmlinkage __visible void __init start_kernel(void)
 	/* Should be run before the first non-init thread is created */
 	init_espfix_bsp();
 #endif
-	thread_stack_cache_init();
+	thread_info_cache_init();
 	cred_init();
 	fork_init();
 	proc_caches_init();
@@ -945,28 +931,6 @@ static int try_to_run_init_process(const char *init_filename)
 
 static noinline void __init kernel_init_freeable(void);
 
-#ifdef CONFIG_DEBUG_RODATA
-static bool rodata_enabled = true;
-static int __init set_debug_rodata(char *str)
-{
-	return strtobool(str, &rodata_enabled);
-}
-__setup("rodata=", set_debug_rodata);
-
-static void mark_readonly(void)
-{
-	if (rodata_enabled)
-		mark_rodata_ro();
-	else
-		pr_info("Kernel memory protection disabled.\n");
-}
-#else
-static inline void mark_readonly(void)
-{
-	pr_warn("This architecture does not have kernel memory protection.\n");
-}
-#endif
-
 static int __ref kernel_init(void *unused)
 {
 	int ret;
@@ -975,12 +939,11 @@ static int __ref kernel_init(void *unused)
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
 	free_initmem();
-	mark_readonly();
+	mark_rodata_ro();
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
 
 	flush_delayed_fput();
-	place_marker("M : Kernel End");
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);

@@ -28,7 +28,6 @@
 #include <asm/kvm_mmio.h>
 #include <asm/kvm_asm.h>
 #include <asm/kvm_emulate.h>
-#include <asm/virt.h>
 
 #include "trace.h"
 
@@ -607,9 +606,6 @@ int create_hyp_mappings(void *from, void *to)
 	unsigned long start = KERN_TO_HYP((unsigned long)from);
 	unsigned long end = KERN_TO_HYP((unsigned long)to);
 
-	if (is_kernel_in_hyp_mode())
-		return 0;
-
 	start = start & PAGE_MASK;
 	end = PAGE_ALIGN(end);
 
@@ -642,9 +638,6 @@ int create_hyp_io_mappings(void *from, void *to, phys_addr_t phys_addr)
 	unsigned long start = KERN_TO_HYP((unsigned long)from);
 	unsigned long end = KERN_TO_HYP((unsigned long)to);
 
-	if (is_kernel_in_hyp_mode())
-		return 0;
-
 	/* Check for a valid kernel IO mapping */
 	if (!is_vmalloc_addr(from) || !is_vmalloc_addr(to - 1))
 		return -EINVAL;
@@ -671,9 +664,9 @@ static void *kvm_alloc_hwpgd(void)
  * kvm_alloc_stage2_pgd - allocate level-1 table for stage-2 translation.
  * @kvm:	The KVM struct pointer for the VM.
  *
- * Allocates only the stage-2 HW PGD level table(s) (can support either full
- * 40-bit input addresses or limited to 32-bit input addresses). Clears the
- * allocated pages.
+ * Allocates the 1st level table only of size defined by S2_PGD_ORDER (can
+ * support either full 40-bit input addresses or limited to 32-bit input
+ * addresses). Clears the allocated pages.
  *
  * Note we don't need locking here as this is only called when the VM is
  * created, which can only be done once.
@@ -899,19 +892,35 @@ static int stage2_set_pmd_huge(struct kvm *kvm, struct kvm_mmu_memory_cache
 	pmd = stage2_get_pmd(kvm, cache, addr);
 	VM_BUG_ON(!pmd);
 
-	/*
-	 * Mapping in huge pages should only happen through a fault.  If a
-	 * page is merged into a transparent huge page, the individual
-	 * subpages of that huge page should be unmapped through MMU
-	 * notifiers before we get here.
-	 *
-	 * Merging of CompoundPages is not supported; they should become
-	 * splitting first, unmapped, merged, and mapped back in on-demand.
-	 */
-	VM_BUG_ON(pmd_present(*pmd) && pmd_pfn(*pmd) != pmd_pfn(*new_pmd));
-
 	old_pmd = *pmd;
 	if (pmd_present(old_pmd)) {
+		/*
+		 * Multiple vcpus faulting on the same PMD entry, can
+		 * lead to them sequentially updating the PMD with the
+		 * same value. Following the break-before-make
+		 * (pmd_clear() followed by tlb_flush()) process can
+		 * hinder forward progress due to refaults generated
+		 * on missing translations.
+		 *
+		 * Skip updating the page table if the entry is
+		 * unchanged.
+		 */
+		if (pmd_val(old_pmd) == pmd_val(*new_pmd))
+			return 0;
+
+		/*
+		 * Mapping in huge pages should only happen through a
+		 * fault.  If a page is merged into a transparent huge
+		 * page, the individual subpages of that huge page
+		 * should be unmapped through MMU notifiers before we
+		 * get here.
+		 *
+		 * Merging of CompoundPages is not supported; they
+		 * should become splitting first, unmapped, merged,
+		 * and mapped back in on-demand.
+		 */
+		VM_BUG_ON(pmd_pfn(old_pmd) != pmd_pfn(*new_pmd));
+
 		pmd_clear(pmd);
 		kvm_tlb_flush_vmid_ipa(kvm, addr);
 	} else {
@@ -968,6 +977,10 @@ static int stage2_set_pte(struct kvm *kvm, struct kvm_mmu_memory_cache *cache,
 	/* Create 2nd stage page table mapping - Level 3 */
 	old_pte = *pte;
 	if (pte_present(old_pte)) {
+		/* Skip page table update if there is no change */
+		if (pte_val(old_pte) == pte_val(*new_pte))
+			return 0;
+
 		kvm_set_pte(pte, __pte(0));
 		kvm_tlb_flush_vmid_ipa(kvm, addr);
 	} else {
@@ -1675,11 +1688,6 @@ phys_addr_t kvm_mmu_get_boot_httbr(void)
 phys_addr_t kvm_get_idmap_vector(void)
 {
 	return hyp_idmap_vector;
-}
-
-phys_addr_t kvm_get_idmap_start(void)
-{
-	return hyp_idmap_start;
 }
 
 int kvm_mmu_init(void)

@@ -118,6 +118,7 @@ static struct sk_buff *ipv6_gso_segment(struct sk_buff *skb,
 		ipv6h = (struct ipv6hdr *)(skb_mac_header(skb) + nhoff);
 		ipv6h->payload_len = htons(skb->len - nhoff - sizeof(*ipv6h));
 		skb->network_header = (u8 *)ipv6h - skb->head;
+		skb_reset_mac_len(skb);
 
 		if (udpfrag) {
 			int err = ip6_find_1stfragopt(skb, &prevhdr);
@@ -242,6 +243,9 @@ static struct sk_buff **ipv6_gro_receive(struct sk_buff **head,
 		/* flush if Traffic Class fields are different */
 		NAPI_GRO_CB(p)->flush |= !!(first_word & htonl(0x0FF00000));
 		NAPI_GRO_CB(p)->flush |= flush;
+
+		/* Clear flush_id, there's really no concept of ID in IPv6. */
+		NAPI_GRO_CB(p)->flush_id = 0;
 	}
 
 	NAPI_GRO_CB(skb)->flush |= flush;

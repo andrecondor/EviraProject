@@ -281,7 +281,7 @@ static int read_version(struct sock *sk, struct hci_dev *hdev, void *data,
 {
 	struct mgmt_rp_read_version rp;
 
-	BT_DBG("sock %pK", sk);
+	BT_DBG("sock %p", sk);
 
 	rp.version = MGMT_VERSION;
 	rp.revision = cpu_to_le16(MGMT_REVISION);
@@ -298,7 +298,7 @@ static int read_commands(struct sock *sk, struct hci_dev *hdev, void *data,
 	size_t rp_size;
 	int i, err;
 
-	BT_DBG("sock %pK", sk);
+	BT_DBG("sock %p", sk);
 
 	if (hci_sock_test_flag(sk, HCI_SOCK_TRUSTED)) {
 		num_commands = ARRAY_SIZE(mgmt_commands);
@@ -351,7 +351,7 @@ static int read_index_list(struct sock *sk, struct hci_dev *hdev, void *data,
 	u16 count;
 	int err;
 
-	BT_DBG("sock %pK", sk);
+	BT_DBG("sock %p", sk);
 
 	read_lock(&hci_dev_list_lock);
 
@@ -411,7 +411,7 @@ static int read_unconf_index_list(struct sock *sk, struct hci_dev *hdev,
 	u16 count;
 	int err;
 
-	BT_DBG("sock %pK", sk);
+	BT_DBG("sock %p", sk);
 
 	read_lock(&hci_dev_list_lock);
 
@@ -471,7 +471,7 @@ static int read_ext_index_list(struct sock *sk, struct hci_dev *hdev,
 	u16 count;
 	int err;
 
-	BT_DBG("sock %pK", sk);
+	BT_DBG("sock %p", sk);
 
 	read_lock(&hci_dev_list_lock);
 
@@ -588,7 +588,7 @@ static int read_config_info(struct sock *sk, struct hci_dev *hdev,
 	struct mgmt_rp_read_config_info rp;
 	u32 options = 0;
 
-	BT_DBG("sock %pK %s", sk, hdev->name);
+	BT_DBG("sock %p %s", sk, hdev->name);
 
 	hci_dev_lock(hdev);
 
@@ -1373,7 +1373,7 @@ static int read_controller_info(struct sock *sk, struct hci_dev *hdev,
 {
 	struct mgmt_rp_read_info rp;
 
-	BT_DBG("sock %pK %s", sk, hdev->name);
+	BT_DBG("sock %p %s", sk, hdev->name);
 
 	hci_dev_lock(hdev);
 
@@ -3083,9 +3083,8 @@ static int unpair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 	/* LE address type */
 	addr_type = le_addr_type(cp->addr.type);
 
-	hci_remove_irk(hdev, &cp->addr.bdaddr, addr_type);
-
-	err = hci_remove_ltk(hdev, &cp->addr.bdaddr, addr_type);
+	/* Abort any ongoing SMP pairing. Removes ltk and irk if they exist. */
+	err = smp_cancel_and_remove_pairing(hdev, &cp->addr.bdaddr, addr_type);
 	if (err < 0) {
 		err = mgmt_cmd_complete(sk, hdev->id, MGMT_OP_UNPAIR_DEVICE,
 					MGMT_STATUS_NOT_PAIRED, &rp,
@@ -3099,8 +3098,6 @@ static int unpair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 		goto done;
 	}
 
-	/* Abort any ongoing SMP pairing */
-	smp_cancel_pairing(conn);
 
 	/* Defer clearing up the connection parameters until closing to
 	 * give a chance of keeping them if a repairing happens.

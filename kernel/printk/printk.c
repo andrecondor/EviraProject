@@ -55,10 +55,6 @@
 #include "console_cmdline.h"
 #include "braille.h"
 
-#ifdef CONFIG_EARLY_PRINTK_DIRECT
-extern void printascii(char *);
-#endif
-
 int console_printk[4] = {
 	CONSOLE_LOGLEVEL_DEFAULT,	/* console_loglevel */
 	MESSAGE_LOGLEVEL_DEFAULT,	/* default_message_loglevel */
@@ -236,11 +232,7 @@ struct printk_log {
 	u8 facility;		/* syslog facility */
 	u8 flags:5;		/* internal record flags */
 	u8 level:3;		/* syslog level */
-}
-#ifdef CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
-__packed __aligned(4)
-#endif
-;
+};
 
 /*
  * The logbuf_lock protects kmsg buffer, indices, counters.  This can be taken
@@ -281,7 +273,11 @@ static u32 clear_idx;
 #define LOG_FACILITY(v)		((v) >> 3 & 0xff)
 
 /* record buffer */
+#if defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS)
+#define LOG_ALIGN 4
+#else
 #define LOG_ALIGN __alignof__(struct printk_log)
+#endif
 #define __LOG_BUF_LEN (1 << CONFIG_LOG_BUF_SHIFT)
 static char __log_buf[__LOG_BUF_LEN] __aligned(LOG_ALIGN);
 static char *log_buf = __log_buf;
@@ -885,7 +881,12 @@ static void __init log_buf_len_update(unsigned size)
 /* save requested log_buf_len since it's too early to process it */
 static int __init log_buf_len_setup(char *str)
 {
-	unsigned size = memparse(str, &str);
+	unsigned int size;
+
+	if (!str)
+		return -EINVAL;
+
+	size = memparse(str, &str);
 
 	log_buf_len_update(size);
 
@@ -1758,10 +1759,6 @@ asmlinkage int vprintk_emit(int facility, int level,
 		}
 	}
 
-#ifdef CONFIG_EARLY_PRINTK_DIRECT
-	printascii(text);
-#endif
-
 	if (level == LOGLEVEL_DEFAULT)
 		level = default_message_loglevel;
 
@@ -2119,8 +2116,6 @@ void resume_console(void)
 	console_unlock();
 }
 
-#ifdef CONFIG_CONSOLE_FLUSH_ON_HOTPLUG
-
 /**
  * console_cpu_notify - print deferred console messages after CPU hotplug
  * @self: notifier struct
@@ -2140,17 +2135,11 @@ static int console_cpu_notify(struct notifier_block *self,
 	case CPU_DEAD:
 	case CPU_DOWN_FAILED:
 	case CPU_UP_CANCELED:
-	case CPU_DYING:
-#ifdef CONFIG_CONSOLE_FLUSH_ON_HOTPLUG
 		console_lock();
 		console_unlock();
-#endif
-		break;
 	}
 	return NOTIFY_OK;
 }
-
-#endif
 
 /**
  * console_lock - lock the console system for exclusive use.
@@ -2716,9 +2705,7 @@ static int __init printk_late_init(void)
 			unregister_console(con);
 		}
 	}
-#ifdef CONFIG_CONSOLE_FLUSH_ON_HOTPLUG
 	hotcpu_notifier(console_cpu_notify, 0);
-#endif
 	return 0;
 }
 late_initcall(printk_late_init);
@@ -3186,8 +3173,9 @@ void show_regs_print_info(const char *log_lvl)
 {
 	dump_stack_print_info(log_lvl);
 
-	printk("%stask: %p task.stack: %p\n",
-	       log_lvl, current, task_stack_page(current));
+	printk("%stask: %p ti: %p task.ti: %p\n",
+	       log_lvl, current, current_thread_info(),
+	       task_thread_info(current));
 }
 
 #endif

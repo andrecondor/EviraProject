@@ -337,8 +337,6 @@
 #define KEY_MICMUTE		248	/* Mute / unmute the microphone */
 
 /* Code 255 is reserved for special needs of AT keyboard driver */
-#define KEY_ANT_CONNECT         0x292
-#define KEY_ANT_UNCONNECT       0x293
 
 #define BTN_MISC		0x100
 #define BTN_0			0x100
@@ -710,6 +708,15 @@
 
 #define ABS_MISC		0x28
 
+/*
+ * 0x2e is reserved and should not be used in input drivers.
+ * It was used by HID as ABS_MISC+6 and userspace needs to detect if
+ * the next ABS_* event is correct or is just ABS_MISC + n.
+ * We define here ABS_RESERVED so userspace can rely on it and detect
+ * the situation described above.
+ */
+#define ABS_RESERVED		0x2e
+
 #define ABS_MT_SLOT		0x2f	/* MT slot being modified */
 #define ABS_MT_TOUCH_MAJOR	0x30	/* Major axis of touching ellipse */
 #define ABS_MT_TOUCH_MINOR	0x31	/* Minor axis (omit if circular) */
@@ -751,11 +758,7 @@
 #define SW_ROTATE_LOCK		0x0c  /* set = rotate locked/disabled */
 #define SW_LINEIN_INSERT	0x0d  /* set = inserted */
 #define SW_MUTE_DEVICE		0x0e  /* set = device disabled */
-#define SW_HPHL_OVERCURRENT	0x0f  /* set = over current on left hph */
-#define SW_HPHR_OVERCURRENT	0x10  /* set = over current on right hph */
-#define SW_MICROPHONE2_INSERT   0x11  /* set = inserted */
-#define SW_UNSUPPORT_INSERT	0x12  /* set = unsupported device inserted */
-#define SW_MAX			0x20
+#define SW_MAX			0x0f
 #define SW_CNT			(SW_MAX+1)
 
 /*

@@ -9,9 +9,6 @@
 #
 # Normal rules
 #
-clean.sh
-build.sh
-build.log
 .*
 *.o
 *.o.*
@@ -45,7 +42,6 @@ Module.symvers
 #
 # Top-level generic files
 #
-/out
 /tags
 /TAGS
 /linux

@@ -172,7 +172,6 @@ struct ip_reply_arg {
 				/* -1 if not needed */ 
 	int	    bound_dev_if;
 	u8  	    tos;
-	kuid_t	    uid;
 }; 
 
 #define IP_REPLY_ARG_NOSRCCHECK 1
@@ -242,8 +241,6 @@ static inline int inet_is_local_reserved_port(struct net *net, int port)
 	return 0;
 }
 #endif
-
-extern int sysctl_reserved_port_bind;
 
 /* From inetpeer.c */
 extern int inet_peer_threshold;
@@ -527,7 +524,6 @@ static inline struct sk_buff *ip_check_defrag(struct net *net, struct sk_buff *s
 	return skb;
 }
 #endif
-int ip_frag_mem(struct net *net);
 
 /*
  *	Functions provided by ip_forward.c
@@ -550,6 +546,8 @@ static inline int ip_options_echo(struct ip_options *dopt, struct sk_buff *skb)
 }
 
 void ip_options_fragment(struct sk_buff *skb);
+int __ip_options_compile(struct net *net, struct ip_options *opt,
+			 struct sk_buff *skb, __be32 *info);
 int ip_options_compile(struct net *net, struct ip_options *opt,
 		       struct sk_buff *skb);
 int ip_options_get(struct net *net, struct ip_options_rcu **optp,

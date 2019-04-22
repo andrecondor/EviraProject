@@ -764,8 +764,6 @@ const char * const vmstat_text[] = {
 	"workingset_nodereclaim",
 	"nr_anon_transparent_hugepages",
 	"nr_free_cma",
-	"nr_swapcache",
-	"nr_indirectly_reclaimable",
 
 	/* enum writeback_stat_item counters */
 	"nr_dirty_threshold",
@@ -775,7 +773,6 @@ const char * const vmstat_text[] = {
 	/* enum vm_event_item counters */
 	"pgpgin",
 	"pgpgout",
-	"pgpgoutclean",
 	"pswpin",
 	"pswpout",
 
@@ -829,7 +826,6 @@ const char * const vmstat_text[] = {
 	"compact_stall",
 	"compact_fail",
 	"compact_success",
-	"compact_daemon_wake",
 #endif
 
 #ifdef CONFIG_HUGETLB_PAGE
@@ -864,6 +860,9 @@ const char * const vmstat_text[] = {
 #ifdef CONFIG_SMP
 	"nr_tlb_remote_flush",
 	"nr_tlb_remote_flush_received",
+#else
+	"", /* nr_tlb_remote_flush */
+	"", /* nr_tlb_remote_flush_received */
 #endif /* CONFIG_SMP */
 	"nr_tlb_local_flush_all",
 	"nr_tlb_local_flush_one",
@@ -872,7 +871,6 @@ const char * const vmstat_text[] = {
 #ifdef CONFIG_DEBUG_VM_VMACACHE
 	"vmacache_find_calls",
 	"vmacache_find_hits",
-	"vmacache_full_flushes",
 #endif
 #endif /* CONFIG_VM_EVENTS_COUNTERS */
 };
@@ -908,7 +906,6 @@ static void frag_stop(struct seq_file *m, void *arg)
 
 /* Walk all the zones in a node and print using a callback */
 static void walk_zones_in_node(struct seq_file *m, pg_data_t *pgdat,
-		bool nolock,
 		void (*print)(struct seq_file *m, pg_data_t *, struct zone *))
 {
 	struct zone *zone;
@@ -919,16 +916,27 @@ static void walk_zones_in_node(struct seq_file *m, pg_data_t *pgdat,
 		if (!populated_zone(zone))
 			continue;
 
-		if (!nolock)
-			spin_lock_irqsave(&zone->lock, flags);
+		spin_lock_irqsave(&zone->lock, flags);
 		print(m, pgdat, zone);
-		if (!nolock)
-			spin_unlock_irqrestore(&zone->lock, flags);
+		spin_unlock_irqrestore(&zone->lock, flags);
 	}
 }
 #endif
 
 #ifdef CONFIG_PROC_FS
+static char * const migratetype_names[MIGRATE_TYPES] = {
+	"Unmovable",
+	"Movable",
+	"Reclaimable",
+	"HighAtomic",
+#ifdef CONFIG_CMA
+	"CMA",
+#endif
+#ifdef CONFIG_MEMORY_ISOLATION
+	"Isolate",
+#endif
+};
+
 static void frag_show_print(struct seq_file *m, pg_data_t *pgdat,
 						struct zone *zone)
 {
@@ -946,7 +954,7 @@ static void frag_show_print(struct seq_file *m, pg_data_t *pgdat,
 static int frag_show(struct seq_file *m, void *arg)
 {
 	pg_data_t *pgdat = (pg_data_t *)arg;
-	walk_zones_in_node(m, pgdat, false, frag_show_print);
+	walk_zones_in_node(m, pgdat, frag_show_print);
 	return 0;
 }
 
@@ -987,7 +995,7 @@ static int pagetypeinfo_showfree(struct seq_file *m, void *arg)
 		seq_printf(m, "%6d ", order);
 	seq_putc(m, '\n');
 
-	walk_zones_in_node(m, pgdat, false, pagetypeinfo_showfree_print);
+	walk_zones_in_node(m, pgdat, pagetypeinfo_showfree_print);
 
 	return 0;
 }
@@ -1036,7 +1044,7 @@ static int pagetypeinfo_showblockcount(struct seq_file *m, void *arg)
 	for (mtype = 0; mtype < MIGRATE_TYPES; mtype++)
 		seq_printf(m, "%12s ", migratetype_names[mtype]);
 	seq_putc(m, '\n');
-	walk_zones_in_node(m, pgdat, false, pagetypeinfo_showblockcount_print);
+	walk_zones_in_node(m, pgdat, pagetypeinfo_showblockcount_print);
 
 	return 0;
 }
@@ -1080,11 +1088,7 @@ static void pagetypeinfo_showmixedcount_print(struct seq_file *m,
 
 			page = pfn_to_page(pfn);
 			if (PageBuddy(page)) {
-				unsigned long freepage_order;
-
-				freepage_order = page_order_unsafe(page);
-				if (freepage_order < MAX_ORDER)
-					pfn += (1UL << freepage_order) - 1;
+				pfn += (1UL << page_order(page)) - 1;
 				continue;
 			}
 
@@ -1131,7 +1135,7 @@ static void pagetypeinfo_showmixedcount(struct seq_file *m, pg_data_t *pgdat)
 #ifdef CONFIG_PAGE_OWNER
 	int mtype;
 
-	if (!static_branch_unlikely(&page_owner_inited))
+	if (!page_owner_inited)
 		return;
 
 	drain_all_pages(NULL);
@@ -1141,7 +1145,7 @@ static void pagetypeinfo_showmixedcount(struct seq_file *m, pg_data_t *pgdat)
 		seq_printf(m, "%12s ", migratetype_names[mtype]);
 	seq_putc(m, '\n');
 
-	walk_zones_in_node(m, pgdat, true, pagetypeinfo_showmixedcount_print);
+	walk_zones_in_node(m, pgdat, pagetypeinfo_showmixedcount_print);
 #endif /* CONFIG_PAGE_OWNER */
 }
 
@@ -1274,7 +1278,7 @@ static void zoneinfo_show_print(struct seq_file *m, pg_data_t *pgdat,
 static int zoneinfo_show(struct seq_file *m, void *arg)
 {
 	pg_data_t *pgdat = (pg_data_t *)arg;
-	walk_zones_in_node(m, pgdat, false, zoneinfo_show_print);
+	walk_zones_in_node(m, pgdat, zoneinfo_show_print);
 	return 0;
 }
 
@@ -1391,7 +1395,7 @@ static cpumask_var_t cpu_stat_off;
 
 static void vmstat_update(struct work_struct *w)
 {
-	if (refresh_cpu_vm_stats(true) && !cpu_isolated(smp_processor_id())) {
+	if (refresh_cpu_vm_stats(true)) {
 		/*
 		 * Counters were updated so we expect more updates
 		 * to occur in the future. Keep on running the
@@ -1403,13 +1407,22 @@ static void vmstat_update(struct work_struct *w)
 	} else {
 		/*
 		 * We did not update any counters so the app may be in
-		 * a mode where it does not cause counter updates or the cpu
-		 * was isolated.
+		 * a mode where it does not cause counter updates.
 		 * We may be uselessly running vmstat_update.
 		 * Defer the checking for differentials to the
 		 * shepherd thread on a different processor.
 		 */
-		cpumask_set_cpu(smp_processor_id(), cpu_stat_off);
+		int r;
+		/*
+		 * Shepherd work thread does not race since it never
+		 * changes the bit if its zero but the cpu
+		 * online / off line code may race if
+		 * worker threads are still allowed during
+		 * shutdown / startup.
+		 */
+		r = cpumask_test_and_set_cpu(smp_processor_id(),
+			cpu_stat_off);
+		VM_BUG_ON(r);
 	}
 }
 
@@ -1471,7 +1484,7 @@ static void vmstat_shepherd(struct work_struct *w)
 	get_online_cpus();
 	/* Check processors whose vmstat worker threads have been disabled */
 	for_each_cpu(cpu, cpu_stat_off)
-		if (!cpu_isolated(cpu) && need_update(cpu) &&
+		if (need_update(cpu) &&
 			cpumask_test_and_clear_cpu(cpu, cpu_stat_off))
 
 			queue_delayed_work_on(cpu, vmstat_wq,
@@ -1635,7 +1648,7 @@ static int unusable_show(struct seq_file *m, void *arg)
 	if (!node_state(pgdat->node_id, N_MEMORY))
 		return 0;
 
-	walk_zones_in_node(m, pgdat, false, unusable_show_print);
+	walk_zones_in_node(m, pgdat, unusable_show_print);
 
 	return 0;
 }
@@ -1687,7 +1700,7 @@ static int extfrag_show(struct seq_file *m, void *arg)
 {
 	pg_data_t *pgdat = (pg_data_t *)arg;
 
-	walk_zones_in_node(m, pgdat, false, extfrag_show_print);
+	walk_zones_in_node(m, pgdat, extfrag_show_print);
 
 	return 0;
 }

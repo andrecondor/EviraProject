@@ -2505,7 +2505,7 @@ static void layout_symtab(struct module *mod, struct load_info *info)
 
 	/* We'll tack temporary mod_kallsyms on the end. */
 	mod->init_size = ALIGN(mod->init_size,
-				      __alignof__(struct mod_kallsyms));
+			       __alignof__(struct mod_kallsyms));
 	info->mod_kallsyms_init_off = mod->init_size;
 	mod->init_size += sizeof(struct mod_kallsyms);
 	mod->init_size = debug_align(mod->init_size);
@@ -2585,13 +2585,7 @@ void * __weak module_alloc(unsigned long size)
 	return vmalloc_exec(size);
 }
 
-#if defined(CONFIG_DEBUG_KMEMLEAK) && defined(CONFIG_DEBUG_MODULE_SCAN_OFF)
-static void kmemleak_load_module(const struct module *mod,
-				 const struct load_info *info)
-{
-	kmemleak_no_scan(mod->module_core);
-}
-#elif defined(CONFIG_DEBUG_KMEMLEAK)
+#ifdef CONFIG_DEBUG_KMEMLEAK
 static void kmemleak_load_module(const struct module *mod,
 				 const struct load_info *info)
 {
@@ -3866,7 +3860,7 @@ static unsigned long mod_find_symname(struct module *mod, const char *name)
 
 	for (i = 0; i < kallsyms->num_symtab; i++)
 		if (strcmp(name, symname(kallsyms, i)) == 0 &&
-		    kallsyms->symtab[i].st_info != 'U')
+		    kallsyms->symtab[i].st_shndx != SHN_UNDEF)
 			return kallsyms->symtab[i].st_value;
 	return 0;
 }
@@ -3912,6 +3906,10 @@ int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
 		if (mod->state == MODULE_STATE_UNFORMED)
 			continue;
 		for (i = 0; i < kallsyms->num_symtab; i++) {
+
+			if (kallsyms->symtab[i].st_shndx == SHN_UNDEF)
+				continue;
+
 			ret = fn(data, symname(kallsyms, i),
 				 mod, kallsyms->symtab[i].st_value);
 			if (ret != 0)

@@ -278,7 +278,7 @@ int __weak get_user_pages_fast(unsigned long start,
 {
 	struct mm_struct *mm = current->mm;
 	return get_user_pages_unlocked(current, mm, start, nr_pages,
-				       write, 0, pages);
+				       pages, write ? FOLL_WRITE : 0);
 }
 EXPORT_SYMBOL_GPL(get_user_pages_fast);
 
@@ -368,12 +368,10 @@ struct address_space *page_mapping(struct page *page)
 	}
 
 	mapping = (unsigned long)page->mapping;
-	if ((unsigned long)mapping & PAGE_MAPPING_ANON)
+	if (mapping & PAGE_MAPPING_FLAGS)
 		return NULL;
-
-	return (void *)((unsigned long)mapping & ~PAGE_MAPPING_FLAGS);
+	return page->mapping;
 }
-EXPORT_SYMBOL(page_mapping);
 
 int overcommit_ratio_handler(struct ctl_table *table, int write,
 			     void __user *buffer, size_t *lenp,

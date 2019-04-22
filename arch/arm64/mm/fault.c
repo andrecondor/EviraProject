@@ -40,34 +40,8 @@
 #include <asm/system_misc.h>
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
-#include <asm/edac.h>
-#include <soc/qcom/scm.h>
-
-#include <trace/events/exception.h>
 
 static const char *fault_name(unsigned int esr);
-
-#ifdef CONFIG_KPROBES
-static inline int notify_page_fault(struct pt_regs *regs, unsigned int esr)
-{
-	int ret = 0;
-
-	/* kprobe_running() needs smp_processor_id() */
-	if (!user_mode(regs)) {
-		preempt_disable();
-		if (kprobe_running() && kprobe_fault_handler(regs, esr))
-			ret = 1;
-		preempt_enable();
-	}
-
-	return ret;
-}
-#else
-static inline int notify_page_fault(struct pt_regs *regs, unsigned int esr)
-{
-	return 0;
-}
-#endif
 
 /*
  * Dump out the page tables associated with 'addr' in mm 'mm'.
@@ -133,36 +107,32 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 	/* only preserve the access flags and write permission */
 	pte_val(entry) &= PTE_AF | PTE_WRITE | PTE_DIRTY;
 
-	/*
-	 * PTE_RDONLY is cleared by default in the asm below, so set it in
-	 * back if necessary (read-only or clean PTE).
-	 */
+	/* set PTE_RDONLY if actual read-only or clean PTE */
 	if (!pte_write(entry) || !pte_sw_dirty(entry))
 		pte_val(entry) |= PTE_RDONLY;
 
 	/*
 	 * Setting the flags must be done atomically to avoid racing with the
-	 * hardware update of the access/dirty state.
+	 * hardware update of the access/dirty state. The PTE_RDONLY bit must
+	 * be set to the most permissive (lowest value) of *ptep and entry
+	 * (calculated as: a & b == ~(~a | ~b)).
 	 */
+	pte_val(entry) ^= PTE_RDONLY;
 	asm volatile("//	ptep_set_access_flags\n"
 	"	prfm	pstl1strm, %2\n"
 	"1:	ldxr	%0, %2\n"
-	"	and	%0, %0, %3		// clear PTE_RDONLY\n"
+	"	eor	%0, %0, %3		// negate PTE_RDONLY in *ptep\n"
 	"	orr	%0, %0, %4		// set flags\n"
+	"	eor	%0, %0, %3		// negate final PTE_RDONLY\n"
 	"	stxr	%w1, %0, %2\n"
 	"	cbnz	%w1, 1b\n"
 	: "=&r" (old_pteval), "=&r" (tmp), "+Q" (pte_val(*ptep))
-	: "L" (~PTE_RDONLY), "r" (pte_val(entry)));
+	: "L" (PTE_RDONLY), "r" (pte_val(entry)));
 
 	flush_tlb_fix_spurious_fault(vma, address);
 	return 1;
 }
 #endif
-
-static bool is_el1_instruction_abort(unsigned int esr)
-{
-	return ESR_ELx_EC(esr) == ESR_ELx_EC_IABT_CUR;
-}
 
 /*
  * The kernel tried to access some page that wasn't present.
@@ -172,9 +142,8 @@ static void __do_kernel_fault(struct mm_struct *mm, unsigned long addr,
 {
 	/*
 	 * Are we prepared to handle this kernel fault?
-	 * We are almost certainly not prepared to handle instruction faults.
 	 */
-	if (!is_el1_instruction_abort(esr) && fixup_exception(regs))
+	if (fixup_exception(regs))
 		return;
 
 	/*
@@ -200,8 +169,6 @@ static void __do_user_fault(struct task_struct *tsk, unsigned long addr,
 			    struct pt_regs *regs)
 {
 	struct siginfo si;
-
-	trace_user_fault(tsk, addr, esr);
 
 	if (unhandled_signal(tsk, sig) && show_unhandled_signals_ratelimited()) {
 		pr_info("%s[%d]: unhandled %s (%d) at 0x%08lx, esr 0x%03x\n",
@@ -237,6 +204,8 @@ static void do_bad_area(unsigned long addr, unsigned int esr, struct pt_regs *re
 
 #define VM_FAULT_BADMAP		0x010000
 #define VM_FAULT_BADACCESS	0x020000
+
+#define ESR_LNX_EXEC		(1 << 24)
 
 static int __do_page_fault(struct mm_struct *mm, unsigned long addr,
 			   unsigned int mm_flags, unsigned long vm_flags,
@@ -276,26 +245,6 @@ out:
 	return fault;
 }
 
-static inline bool is_permission_fault(unsigned int esr, struct pt_regs *regs)
-{
-	unsigned int ec       = ESR_ELx_EC(esr);
-	unsigned int fsc_type = esr & ESR_ELx_FSC_TYPE;
-
-	if (ec != ESR_ELx_EC_DABT_CUR && ec != ESR_ELx_EC_IABT_CUR)
-		return false;
-
-	if (system_uses_ttbr0_pan())
-		return fsc_type == ESR_ELx_FSC_FAULT &&
-			(regs->pstate & PSR_PAN_BIT);
-	else
-		return fsc_type == ESR_ELx_FSC_PERM;
-}
-
-static bool is_el0_instruction_abort(unsigned int esr)
-{
-	return ESR_ELx_EC(esr) == ESR_ELx_EC_IABT_LOW;
-}
-
 static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 				   struct pt_regs *regs)
 {
@@ -304,9 +253,6 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	int fault, sig, code;
 	unsigned long vm_flags = VM_READ | VM_WRITE | VM_EXEC;
 	unsigned int mm_flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
-
-	if (notify_page_fault(regs, esr))
-		return 0;
 
 	tsk = current;
 	mm  = tsk->mm;
@@ -325,21 +271,19 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	if (user_mode(regs))
 		mm_flags |= FAULT_FLAG_USER;
 
-	if (is_el0_instruction_abort(esr)) {
+	if (esr & ESR_LNX_EXEC) {
 		vm_flags = VM_EXEC;
-	} else if (((esr & ESR_ELx_WNR) && !(esr & ESR_ELx_CM)) ||
-			((esr & ESR_ELx_CM) && !(mm_flags & FAULT_FLAG_USER))) {
+	} else if ((esr & ESR_ELx_WNR) && !(esr & ESR_ELx_CM)) {
 		vm_flags = VM_WRITE;
 		mm_flags |= FAULT_FLAG_WRITE;
 	}
 
-	if (addr < USER_DS && is_permission_fault(esr, regs)) {
-		if (is_el1_instruction_abort(esr))
-			die("Attempting to execute userspace memory", regs, esr);
-
-		if (!search_exception_tables(regs->pc))
-			die("Accessing user space memory outside uaccess.h routines", regs, esr);
-	}
+	/*
+	 * PAN bit set implies the fault happened in kernel space, but not
+	 * in the arch's user access functions.
+	 */
+	if (IS_ENABLED(CONFIG_ARM64_PAN) && (regs->pstate & PSR_PAN_BIT))
+		goto no_context;
 
 	/*
 	 * As per x86, we may deadlock here. However, since the kernel only
@@ -456,19 +400,6 @@ no_context:
 }
 
 /*
- * TLB conflict is already handled in EL2. This rourtine should return zero
- * so that, do_mem_abort would not crash kernel thinking TLB conflict not
- * handled.
-*/
-#ifdef CONFIG_QCOM_TLB_EL2_HANDLER
-static int do_tlb_conf_fault(unsigned long addr,
-				unsigned int esr,
-				struct pt_regs *regs)
-{
-	return 0;
-}
-#endif
-/*
  * First Level Translation Fault Handler
  *
  * We enter here because the first level page table doesn't contain a valid
@@ -501,11 +432,10 @@ static int __kprobes do_translation_fault(unsigned long addr,
  */
 static int do_bad(unsigned long addr, unsigned int esr, struct pt_regs *regs)
 {
-	arm64_check_cache_ecc(NULL);
 	return 1;
 }
 
-static const struct fault_info {
+static struct fault_info {
 	int	(*fn)(unsigned long addr, unsigned int esr, struct pt_regs *regs);
 	int	sig;
 	int	code;
@@ -559,11 +489,7 @@ static const struct fault_info {
 	{ do_bad,		SIGBUS,  0,		"unknown 45"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 46"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 47"			},
-#ifdef CONFIG_QCOM_TLB_EL2_HANDLER
-	{ do_tlb_conf_fault,	SIGBUS,  0,		"TLB conflict abort"		},
-#else
 	{ do_bad,		SIGBUS,  0,		"TLB conflict abort"		},
-#endif
 	{ do_bad,		SIGBUS,  0,		"unknown 49"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 50"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 51"			},
@@ -607,22 +533,6 @@ asmlinkage void __exception do_mem_abort(unsigned long addr, unsigned int esr,
 	info.si_code  = inf->code;
 	info.si_addr  = (void __user *)addr;
 	arm64_notify_die("", regs, &info, esr);
-}
-
-asmlinkage void __exception do_el0_ia_bp_hardening(unsigned long addr,
-						   unsigned int esr,
-						   struct pt_regs *regs)
-{
-	/*
-	 * We've taken an instruction abort from userspace and not yet
-	 * re-enabled IRQs. If the address is a kernel address, apply
-	 * BP hardening prior to enabling IRQs and pre-emption.
-	 */
-	if (addr > TASK_SIZE)
-		arm64_apply_bp_hardening();
-
-	local_irq_enable();
-	do_mem_abort(addr, esr, regs);
 }
 
 /*
@@ -685,22 +595,34 @@ asmlinkage int __exception do_debug_exception(unsigned long addr,
 {
 	const struct fault_info *inf = debug_fault_info + DBG_ESR_EVT(esr);
 	struct siginfo info;
+	int rv;
 
-	if (!inf->fn(addr, esr, regs))
-		return 1;
+	/*
+	 * Tell lockdep we disabled irqs in entry.S. Do nothing if they were
+	 * already disabled to preserve the last enabled/disabled addresses.
+	 */
+	if (interrupts_enabled(regs))
+		trace_hardirqs_off();
 
-	pr_alert("Unhandled debug exception: %s (0x%08x) at 0x%016lx\n",
-		 inf->name, esr, addr);
+	if (!inf->fn(addr, esr, regs)) {
+		rv = 1;
+	} else {
+		pr_alert("Unhandled debug exception: %s (0x%08x) at 0x%016lx\n",
+			 inf->name, esr, addr);
 
-	info.si_signo = inf->sig;
-	info.si_errno = 0;
-	info.si_code  = inf->code;
-	info.si_addr  = (void __user *)addr;
-	arm64_notify_die("", regs, &info, 0);
+		info.si_signo = inf->sig;
+		info.si_errno = 0;
+		info.si_code  = inf->code;
+		info.si_addr  = (void __user *)addr;
+		arm64_notify_die("", regs, &info, 0);
+		rv = 0;
+	}
 
-	return 0;
+	if (interrupts_enabled(regs))
+		trace_hardirqs_on();
+
+	return rv;
 }
-NOKPROBE_SYMBOL(do_debug_exception);
 
 #ifdef CONFIG_ARM64_PAN
 int cpu_enable_pan(void *__unused)
@@ -716,17 +638,3 @@ int cpu_enable_pan(void *__unused)
 	return 0;
 }
 #endif /* CONFIG_ARM64_PAN */
-
-#ifdef CONFIG_ARM64_UAO
-/*
- * Kernel threads have fs=KERNEL_DS by default, and don't need to call
- * set_fs(), devtmpfs in particular relies on this behaviour.
- * We need to enable the feature at runtime (instead of adding it to
- * PSR_MODE_EL1h) as the feature may not be implemented by the cpu.
- */
-int cpu_enable_uao(void *__unused)
-{
-	asm(SET_PSTATE_UAO(1));
-	return 0;
-}
-#endif /* CONFIG_ARM64_UAO */

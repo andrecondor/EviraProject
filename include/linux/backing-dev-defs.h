@@ -10,7 +10,6 @@
 #include <linux/flex_proportions.h>
 #include <linux/timer.h>
 #include <linux/workqueue.h>
-#include <linux/kref.h>
 
 struct page;
 struct device;
@@ -142,7 +141,6 @@ struct backing_dev_info {
 	void *congested_data;	/* Pointer to aux data for congested func */
 
 	char *name;
-	struct kref refcnt;	/* Reference counter for the structure */
 
 	unsigned int min_ratio;
 	unsigned int max_ratio, max_prop_frac;
@@ -227,6 +225,14 @@ static inline void wb_get(struct bdi_writeback *wb)
  */
 static inline void wb_put(struct bdi_writeback *wb)
 {
+	if (WARN_ON_ONCE(!wb->bdi)) {
+		/*
+		 * A driver bug might cause a file to be removed before bdi was
+		 * initialized.
+		 */
+		return;
+	}
+
 	if (wb != &wb->bdi->wb)
 		percpu_ref_put(&wb->refcnt);
 }

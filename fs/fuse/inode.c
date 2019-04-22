@@ -379,9 +379,6 @@ static void fuse_put_super(struct super_block *sb)
 {
 	struct fuse_conn *fc = get_fuse_conn_super(sb);
 
-	fuse_send_destroy(fc);
-
-	fuse_abort_conn(fc);
 	mutex_lock(&fuse_mutex);
 	list_del(&fc->entry);
 	fuse_ctl_remove_conn(fc);
@@ -860,7 +857,6 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 		fc->conn_error = 1;
 	else {
 		unsigned long ra_pages;
-		struct super_block *sb = fc->sb;
 
 		process_init_limits(fc, arg);
 
@@ -899,13 +895,6 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 				fc->async_dio = 1;
 			if (arg->flags & FUSE_WRITEBACK_CACHE)
 				fc->writeback_cache = 1;
-			if (arg->flags & FUSE_PASSTHROUGH) {
-				fc->passthrough = 1;
-				/* Prevent further stacking */
-				sb->s_stack_depth = FILESYSTEM_MAX_STACK_DEPTH;
-				pr_info("FUSE: Pass through is enabled [%s : %d]!\n",
-					current->comm, current->pid);
-			}
 			if (arg->time_gran && arg->time_gran <= 1000000000)
 				fc->sb->s_time_gran = arg->time_gran;
 		} else {
@@ -1180,16 +1169,25 @@ static struct dentry *fuse_mount(struct file_system_type *fs_type,
 	return mount_nodev(fs_type, flags, raw_data, fuse_fill_super);
 }
 
-static void fuse_kill_sb_anon(struct super_block *sb)
+static void fuse_sb_destroy(struct super_block *sb)
 {
 	struct fuse_conn *fc = get_fuse_conn_super(sb);
 
 	if (fc) {
+		fuse_send_destroy(fc);
+
+		fuse_abort_conn(fc);
+		fuse_wait_aborted(fc);
+
 		down_write(&fc->killsb);
 		fc->sb = NULL;
 		up_write(&fc->killsb);
 	}
+}
 
+static void fuse_kill_sb_anon(struct super_block *sb)
+{
+	fuse_sb_destroy(sb);
 	kill_anon_super(sb);
 }
 
@@ -1212,14 +1210,7 @@ static struct dentry *fuse_mount_blk(struct file_system_type *fs_type,
 
 static void fuse_kill_sb_blk(struct super_block *sb)
 {
-	struct fuse_conn *fc = get_fuse_conn_super(sb);
-
-	if (fc) {
-		down_write(&fc->killsb);
-		fc->sb = NULL;
-		up_write(&fc->killsb);
-	}
-
+	fuse_sb_destroy(sb);
 	kill_block_super(sb);
 }
 

@@ -40,6 +40,7 @@
 #include <linux/ramfs.h>
 #include <linux/percpu-refcount.h>
 #include <linux/mount.h>
+#include <linux/nospec.h>
 
 #include <asm/kmap_types.h>
 #include <asm/uaccess.h>
@@ -262,7 +263,6 @@ static int __init aio_setup(void)
 	aio_mnt = kern_mount(&aio_fs);
 	if (IS_ERR(aio_mnt))
 		panic("Failed to create aio fs mount.");
-	aio_mnt->mnt_flags |= MNT_NOEXEC;
 
 	kiocb_cachep = KMEM_CACHE(aio_kiocb, SLAB_HWCACHE_ALIGN|SLAB_PANIC);
 	kioctx_cachep = KMEM_CACHE(kioctx,SLAB_HWCACHE_ALIGN|SLAB_PANIC);
@@ -1064,6 +1064,7 @@ static struct kioctx *lookup_ioctx(unsigned long ctx_id)
 	if (!table || id >= table->nr)
 		goto out;
 
+	id = array_index_nospec(id, table->nr);
 	ctx = rcu_dereference(table->table[id]);
 	if (ctx && ctx->user_id == ctx_id) {
 		if (percpu_ref_tryget_live(&ctx->users))
@@ -1337,7 +1338,7 @@ static long read_events(struct kioctx *ctx, long min_nr, long nr,
 SYSCALL_DEFINE2(io_setup, unsigned, nr_events, aio_context_t __user *, ctxp)
 {
 	struct kioctx *ioctx = NULL;
-	unsigned long ctx = 0;
+	unsigned long ctx;
 	long ret;
 
 	ret = get_user(ctx, ctxp);
@@ -1470,7 +1471,6 @@ rw_common:
 
 		len = ret;
 
-		get_file(file);
 		if (rw == WRITE)
 			file_start_write(file);
 
@@ -1478,7 +1478,6 @@ rw_common:
 
 		if (rw == WRITE)
 			file_end_write(file);
-		fput(file);
 		kfree(iovec);
 		break;
 

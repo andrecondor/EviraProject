@@ -69,14 +69,14 @@ unsigned long arch_mmap_rnd(void)
 {
 	unsigned long rnd;
 
+	/*
+	 *  8 bits of randomness in 32bit mmaps, 20 address space bits
+	 * 28 bits of randomness in 64bit mmaps, 40 address space bits
+	 */
 	if (mmap_is_ia32())
-#ifdef CONFIG_COMPAT
-		rnd = get_random_long() & ((1UL << mmap_rnd_compat_bits) - 1);
-#else
-		rnd = get_random_long() & ((1UL << mmap_rnd_bits) - 1);
-#endif
+		rnd = (unsigned long)get_random_int() % (1<<8);
 	else
-		rnd = get_random_long() & ((1UL << mmap_rnd_bits) - 1);
+		rnd = (unsigned long)get_random_int() % (1<<28);
 
 	return rnd << PAGE_SHIFT;
 }
@@ -138,7 +138,7 @@ bool pfn_modify_allowed(unsigned long pfn, pgprot_t prot)
 	/* If it's real memory always allow */
 	if (pfn_valid(pfn))
 		return true;
-	if (pfn > l1tf_pfn_limit() && !capable(CAP_SYS_ADMIN))
+	if (pfn >= l1tf_pfn_limit() && !capable(CAP_SYS_ADMIN))
 		return false;
 	return true;
 }

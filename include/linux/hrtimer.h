@@ -53,7 +53,6 @@ enum hrtimer_restart {
  *
  * 0x00		inactive
  * 0x01		enqueued into rbtree
- * 0x02		timer is pinned to a cpu
  *
  * The callback state is not part of the timer->state because clearing it would
  * mean touching the timer after the callback, this makes it impossible to free
@@ -73,8 +72,6 @@ enum hrtimer_restart {
  */
 #define HRTIMER_STATE_INACTIVE	0x00
 #define HRTIMER_STATE_ENQUEUED	0x01
-#define HRTIMER_PINNED_SHIFT	1
-#define HRTIMER_STATE_PINNED	(1 << HRTIMER_PINNED_SHIFT)
 
 /**
  * struct hrtimer - the basic hrtimer structure
@@ -91,6 +88,12 @@ enum hrtimer_restart {
  * @base:	pointer to the timer base (per cpu and per clock)
  * @state:	state information (See bit values above)
  * @is_rel:	Set if the timer was armed relative
+ * @start_pid:  timer statistics field to store the pid of the task which
+ *		started the timer
+ * @start_site:	timer statistics field to store the site where the timer
+ *		was started
+ * @start_comm: timer statistics field to store the name of the process which
+ *		started the timer
  *
  * The hrtimer structure must be initialized by hrtimer_init()
  */
@@ -101,6 +104,11 @@ struct hrtimer {
 	struct hrtimer_clock_base	*base;
 	u8				state;
 	u8				is_rel;
+#ifdef CONFIG_TIMER_STATS
+	int				start_pid;
+	void				*start_site;
+	char				start_comm[16];
+#endif
 };
 
 /**
@@ -212,7 +220,7 @@ static inline void hrtimer_set_expires_range(struct hrtimer *timer, ktime_t time
 	timer->node.expires = ktime_add_safe(time, delta);
 }
 
-static inline void hrtimer_set_expires_range_ns(struct hrtimer *timer, ktime_t time, u64 delta)
+static inline void hrtimer_set_expires_range_ns(struct hrtimer *timer, ktime_t time, unsigned long delta)
 {
 	timer->_softexpires = time;
 	timer->node.expires = ktime_add_safe(time, ns_to_ktime(delta));
@@ -349,9 +357,6 @@ DECLARE_PER_CPU(struct tick_device, tick_cpu_device);
 
 /* Exported timer functions: */
 
-/* To be used from cpusets, only */
-extern void hrtimer_quiesce_cpu(void *cpup);
-
 /* Initialize timers: */
 extern void hrtimer_init(struct hrtimer *timer, clockid_t which_clock,
 			 enum hrtimer_mode mode);
@@ -373,7 +378,7 @@ static inline void destroy_hrtimer_on_stack(struct hrtimer *timer) { }
 
 /* Basic timer operations: */
 extern void hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
-				   u64 range_ns, const enum hrtimer_mode mode);
+			unsigned long range_ns, const enum hrtimer_mode mode);
 
 /**
  * hrtimer_start - (re)start an hrtimer on the current CPU
@@ -394,7 +399,7 @@ extern int hrtimer_try_to_cancel(struct hrtimer *timer);
 static inline void hrtimer_start_expires(struct hrtimer *timer,
 					 enum hrtimer_mode mode)
 {
-	u64 delta;
+	unsigned long delta;
 	ktime_t soft, hard;
 	soft = hrtimer_get_softexpires(timer);
 	hard = hrtimer_get_expires(timer);
@@ -472,12 +477,10 @@ extern long hrtimer_nanosleep_restart(struct restart_block *restart_block);
 extern void hrtimer_init_sleeper(struct hrtimer_sleeper *sl,
 				 struct task_struct *tsk);
 
-extern int schedule_hrtimeout_range(ktime_t *expires, u64 delta,
+extern int schedule_hrtimeout_range(ktime_t *expires, unsigned long delta,
 						const enum hrtimer_mode mode);
 extern int schedule_hrtimeout_range_clock(ktime_t *expires,
-					  u64 delta,
-					  const enum hrtimer_mode mode,
-					  int clock);
+		unsigned long delta, const enum hrtimer_mode mode, int clock);
 extern int schedule_hrtimeout(ktime_t *expires, const enum hrtimer_mode mode);
 
 /* Soft interrupt function to run the hrtimer queues: */

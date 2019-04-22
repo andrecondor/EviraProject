@@ -979,7 +979,6 @@ static void ieee80211_do_stop(struct ieee80211_sub_if_data *sdata,
 
 		spin_lock_bh(&txqi->queue.lock);
 		ieee80211_purge_tx_queue(&local->hw, &txqi->queue);
-		txqi->byte_cnt = 0;
 		spin_unlock_bh(&txqi->queue.lock);
 
 		atomic_set(&sdata->txqs_len[txqi->txq.ac], 0);
@@ -987,6 +986,8 @@ static void ieee80211_do_stop(struct ieee80211_sub_if_data *sdata,
 
 	if (local->open_count == 0)
 		ieee80211_clear_tx_pending(local);
+
+	sdata->vif.bss_conf.beacon_int = 0;
 
 	/*
 	 * If the interface goes down while suspended, presumably because

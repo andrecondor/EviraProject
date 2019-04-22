@@ -158,10 +158,6 @@ struct fuse_file {
 
 	/** Has flock been performed on this file? */
 	bool flock:1;
-
-	/* the read write file */
-	struct file *passthrough_filp;
-	bool passthrough_enabled;
 };
 
 /** One input argument of a request */
@@ -241,7 +237,6 @@ struct fuse_args {
 		unsigned argvar:1;
 		unsigned numargs;
 		struct fuse_arg args[2];
-		struct file *passthrough_filp;
 	} out;
 };
 
@@ -257,6 +252,7 @@ struct fuse_io_priv {
 	size_t size;
 	__u64 offset;
 	bool write;
+	bool should_dirty;
 	int err;
 	struct kiocb *iocb;
 	struct file *file;
@@ -377,9 +373,6 @@ struct fuse_req {
 	/** Inode used in the request or NULL */
 	struct inode *inode;
 
-	/** Path used for completing d_canonical_path */
-	struct path *canonical_path;
-
 	/** AIO control block */
 	struct fuse_io_priv *io;
 
@@ -391,9 +384,6 @@ struct fuse_req {
 
 	/** Request is stolen from fuse_file->reserved_req */
 	struct file *stolen_file;
-
-	/** fuse passthrough file  */
-	struct file *passthrough_filp;
 };
 
 struct fuse_iqueue {
@@ -550,9 +540,6 @@ struct fuse_conn {
 
 	/** write-back cache policy (default is write-through) */
 	unsigned writeback_cache:1;
-
-	/** passthrough IO. */
-	unsigned passthrough:1;
 
 	/*
 	 * The following bitfields are only for optimization purposes
@@ -856,6 +843,7 @@ void fuse_request_send_background_locked(struct fuse_conn *fc,
 
 /* Abort all requests */
 void fuse_abort_conn(struct fuse_conn *fc);
+void fuse_wait_aborted(struct fuse_conn *fc);
 
 /**
  * Invalidate inode attributes

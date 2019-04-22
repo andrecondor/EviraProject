@@ -1329,11 +1329,14 @@ static void s3c24xx_serial_set_termios(struct uart_port *port,
 	wr_regl(port, S3C2410_ULCON, ulcon);
 	wr_regl(port, S3C2410_UBRDIV, quot);
 
+	port->status &= ~UPSTAT_AUTOCTS;
+
 	umcon = rd_regl(port, S3C2410_UMCON);
 	if (termios->c_cflag & CRTSCTS) {
 		umcon |= S3C2410_UMCOM_AFC;
 		/* Disable RTS when RX FIFO contains 63 bytes */
 		umcon &= ~S3C2412_UMCON_AFC_8;
+		port->status = UPSTAT_AUTOCTS;
 	} else {
 		umcon &= ~S3C2410_UMCOM_AFC;
 	}
@@ -2461,6 +2464,7 @@ static int __init s3c2410_early_console_setup(struct earlycon_device *device,
 }
 OF_EARLYCON_DECLARE(s3c2410, "samsung,s3c2410-uart",
 			s3c2410_early_console_setup);
+EARLYCON_DECLARE(s3c2410, s3c2410_early_console_setup);
 
 /* S3C2412, S3C2440, S3C64xx */
 static struct samsung_early_console_data s3c2440_early_console_data = {
@@ -2479,6 +2483,9 @@ OF_EARLYCON_DECLARE(s3c2440, "samsung,s3c2440-uart",
 			s3c2440_early_console_setup);
 OF_EARLYCON_DECLARE(s3c6400, "samsung,s3c6400-uart",
 			s3c2440_early_console_setup);
+EARLYCON_DECLARE(s3c2412, s3c2440_early_console_setup);
+EARLYCON_DECLARE(s3c2440, s3c2440_early_console_setup);
+EARLYCON_DECLARE(s3c6400, s3c2440_early_console_setup);
 
 /* S5PV210, EXYNOS */
 static struct samsung_early_console_data s5pv210_early_console_data = {
@@ -2495,6 +2502,8 @@ OF_EARLYCON_DECLARE(s5pv210, "samsung,s5pv210-uart",
 			s5pv210_early_console_setup);
 OF_EARLYCON_DECLARE(exynos4210, "samsung,exynos4210-uart",
 			s5pv210_early_console_setup);
+EARLYCON_DECLARE(s5pv210, s5pv210_early_console_setup);
+EARLYCON_DECLARE(exynos4210, s5pv210_early_console_setup);
 #endif
 
 MODULE_ALIAS("platform:samsung-uart");
