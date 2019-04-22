@@ -17,7 +17,7 @@ CLANG_CROSSCOMPILE=true
 echo
 echo "Set DEFCONFIG"
 echo 
-make CC=clang O=out -o3 Evira_defconfig
+make CC=clang O=out -o3 lavender-perf_defconfig
 
 echo
 echo "Build The Good Stuff"
